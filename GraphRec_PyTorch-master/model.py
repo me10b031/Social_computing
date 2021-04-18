@@ -54,7 +54,8 @@ class _UserModel(nn.Module):
             nn.ReLU(),
         )
 
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        #self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = 'cpu'
         # used for preventing zero div error when calculating softmax score
         self.eps = 1e-10
 
@@ -77,12 +78,15 @@ class _UserModel(nn.Module):
 
         # social aggregation
         q_a_s = self.item_emb(u_user_item_pad[:,:,:,0])   # B x maxu_len x maxi_len x emb_dim
+
         mask_s = torch.where(u_user_item_pad[:,:,:,0] > 0, torch.tensor([1.], device=self.device), torch.tensor([0.], device=self.device))  # B x maxu_len x maxi_len
+
         u_user_item_er = self.rate_emb(u_user_item_pad[:,:,:,1]) # B x maxu_len x maxi_len x emb_dim
-        
+
         x_ia_s = self.g_v(torch.cat([q_a_s, u_user_item_er], dim = 3).view(-1, 2 * self.emb_dim)).view(q_a_s.size())  # B x maxu_len x maxi_len x emb_dim   
 
         p_i_s = mask_s.unsqueeze(3).expand_as(x_ia_s) * self.user_emb(u_user_pad).unsqueeze(2).expand_as(x_ia_s)  # B x maxu_len x maxi_len x emb_dim
+
 
         alpha_s = self.user_items_att(torch.cat([x_ia_s, p_i_s], dim = 3).view(-1, 2 * self.emb_dim)).view(mask_s.size())    # B x maxu_len x maxi_len
         alpha_s = torch.exp(alpha_s) * mask_s
@@ -118,12 +122,26 @@ class _ItemModel(nn.Module):
         
         self.item_users_att = _MultiLayerPercep(2 * self.emb_dim, 1)
         self.aggre_users = _Aggregation(self.emb_dim, self.emb_dim)
+        
+        self.item_items_att = _MultiLayerPercep(2 * self.emb_dim, 1)
+        self.aggre_similaritems = _Aggregation(self.emb_dim, self.emb_dim)
+        
+        self.combine_mlp = nn.Sequential(
+            nn.Linear(2 * self.emb_dim, self.emb_dim, bias = True),
+            nn.ReLU(),
+            nn.Linear(self.emb_dim, self.emb_dim, bias = True),
+            nn.ReLU(),
+            nn.Linear(self.emb_dim, self.emb_dim, bias = True),
+            nn.ReLU(),
+        )
 
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        #self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = 'cpu'
         # used for preventing zero div error when calculating softmax score
         self.eps = 1e-10
-
-    def forward(self, iids, i_user_pad):
+        
+        
+    def forward(self, iids, i_user_pad, i_item_pad, i_item_user_pad):
         # user aggregation
         p_t = self.user_emb(i_user_pad[:,:,0])
         mask_i = torch.where(i_user_pad[:,:,0] > 0, torch.tensor([1.], device=self.device), torch.tensor([0.], device=self.device))
@@ -135,13 +153,53 @@ class _ItemModel(nn.Module):
         q_j = mask_i.unsqueeze(2).expand_as(f_jt) * self.item_emb(iids).unsqueeze(1).expand_as(f_jt)
         
         miu = self.item_users_att(torch.cat([f_jt, q_j], dim = 2).view(-1, 2 * self.emb_dim)).view(mask_i.size())
+        
         miu = torch.exp(miu) * mask_i
         miu = miu / (torch.sum(miu, 1).unsqueeze(1).expand_as(miu) + self.eps)
         
-        z_j = self.aggre_users(torch.sum(miu.unsqueeze(2).expand_as(f_jt) * f_jt, 1))
+        z_jI = self.aggre_users(torch.sum(miu.unsqueeze(2).expand_as(f_jt) * f_jt, 1))
 
-        return z_j
+    
+        #similar item aggregation
+        p_t_s = self.user_emb(i_item_user_pad[:,:,:,0])
 
+        
+        mask_s = torch.where(i_item_user_pad[:,:,:,0] > 0, torch.tensor([1.], device=self.device), torch.tensor([0.], device=self.device))
+
+        
+        i_item_user_er = self.rate_emb(i_item_user_pad[:,:,:,1])
+
+
+        
+        f_jt_s = self.g_u(torch.cat([p_t_s, i_item_user_er], dim = 3).view(-1, 2 * self.emb_dim)).view(p_t_s.size())
+
+        q_j_s =  mask_s.unsqueeze(3).expand_as(f_jt_s) * self.item_emb(i_item_pad).unsqueeze(2).expand_as(f_jt_s)
+
+ 
+        
+        miu_s = self.item_users_att(torch.cat([f_jt_s, q_j_s], dim = 3).view(-1, 2 * self.emb_dim)).view(mask_s.size())        
+        miu_s = torch.exp(miu_s) * mask_s        
+        miu_s = miu_s / (torch.sum(miu_s, 2).unsqueeze(2).expand_as(miu_s) + self.eps)
+                         
+        z_j_s_temp = torch.sum(miu_s.unsqueeze(3).expand_as(f_jt_s) * f_jt_s, 2)
+        
+        z_j_s = self.aggre_users(z_j_s_temp.view(-1,
+self.emb_dim)).view(z_j_s_temp.size())
+        
+        
+        ##Calulate attention scores in similar item aggregation
+        gamma = self.item_items_att(torch.cat([z_j_s, self.item_emb(i_item_pad)], dim = 2).view(-1, 2 * self.emb_dim)).view(i_item_pad.size())
+        mask_si = torch.where(i_item_pad > 0, torch.tensor([1.], device=self.device), torch.tensor([0.], device=self.device))
+        gamma = torch.exp(gamma) * mask_si
+        gamma = gamma / (torch.sum(gamma, 1).unsqueeze(1).expand_as(gamma) + self.eps)
+        
+        z_jS = self.aggre_similaritems(torch.sum(gamma.unsqueeze(2).expand_as(z_j_s) * z_j_s, 1))
+         
+        z_j = self.combine_mlp(torch.cat([z_jI, z_jS], dim = 1))
+        
+        return z_jI
+        
+        
 
 class GraphRec(nn.Module):
     '''GraphRec model proposed in the paper Graph neural network for social recommendation 
@@ -176,7 +234,7 @@ class GraphRec(nn.Module):
         )
 
 
-    def forward(self, uids, iids, u_item_pad, u_user_pad, u_user_item_pad, i_user_pad):
+    def forward(self, uids, iids, u_item_pad, u_user_pad, u_user_item_pad, i_user_pad, i_item_pad, i_item_user_pad):
         '''
         Args:
             uids: the user id sequences.
@@ -197,9 +255,8 @@ class GraphRec(nn.Module):
         Returns:
             the predicted rate scores of the user to the item.
         '''
-
         h_i = self.user_model(uids, u_item_pad, u_user_pad, u_user_item_pad)
-        z_j = self.item_model(iids, i_user_pad)
+        z_j = self.item_model(iids, i_user_pad, i_item_pad, i_item_user_pad)
 
         # make prediction
         r_ij = self.rate_pred(torch.cat([h_i, z_j], dim = 1))

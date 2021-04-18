@@ -15,10 +15,10 @@ def collate_fn(batch_data):
        It will be used in the Dataloader
     """
     uids, iids, labels = [], [], []
-    u_items, u_users, u_users_items, i_users = [], [], [], []
-    u_items_len, u_users_len, i_users_len = [], [], []
+    u_items, u_users, u_users_items, i_users, i_items, i_items_users = [], [], [], [], [], []
+    u_items_len, u_users_len, i_users_len, i_items_len = [], [], [], []
 
-    for data, u_items_u, u_users_u, u_users_items_u, i_users_i in batch_data:
+    for data, u_items_u, u_users_u, u_users_items_u, i_users_i, i_items_i, i_items_users_i in batch_data:
 
         (uid, iid, label) = data
         uids.append(uid)
@@ -63,6 +63,32 @@ def collate_fn(batch_data):
         else:
             i_users.append(random.sample(i_users_i, truncate_len))
         i_users_len.append(min(len(i_users_i), truncate_len))
+        
+        
+        # item-items and item-items-users
+        if len(i_items_i) <= truncate_len:
+            i_items.append(i_items_i)
+            i_i_users = [] 
+            for iiu in i_items_users_i:
+                if len(iiu) < truncate_len:
+                    i_i_users.append(iiu)
+                else:
+                    i_i_users.append(random.sample(iiu, truncate_len))
+            i_items_users.append(i_i_users)
+        else:
+            sample_index = random.sample(list(range(len(i_items_i))), truncate_len)
+            i_items.append([i_items_i[si] for si in sample_index])
+
+            i_items_users_i_tr = [i_items_users_i[si] for si in sample_index]
+            i_i_users = [] 
+            for iiu in i_items_users_i_tr:
+                if len(iiu) < truncate_len:
+                    i_i_users.append(iiu)
+                else:
+                    i_i_users.append(random.sample(iiu, truncate_len))
+            i_items_users.append(i_i_users)
+
+        i_items_len.append(min(len(i_items_i), truncate_len))	
 
     batch_size = len(batch_data)
 
@@ -70,6 +96,7 @@ def collate_fn(batch_data):
     u_items_maxlen = max(u_items_len)
     u_users_maxlen = max(u_users_len)
     i_users_maxlen = max(i_users_len)
+    i_items_maxlen = max(i_items_len)
     
     u_item_pad = torch.zeros([batch_size, u_items_maxlen, 2], dtype=torch.long)
     for i, ui in enumerate(u_items):
@@ -87,6 +114,16 @@ def collate_fn(batch_data):
     i_user_pad = torch.zeros([batch_size, i_users_maxlen, 2], dtype=torch.long)
     for i, iu in enumerate(i_users):
         i_user_pad[i, :len(iu), :] = torch.LongTensor(iu)
+    
+    i_item_pad = torch.zeros([batch_size, i_items_maxlen], dtype=torch.long)
+    for i, ii in enumerate(i_items):
+        i_item_pad[i, :len(ii)] = torch.LongTensor(ii)
+    
+    i_item_user_pad = torch.zeros([batch_size, i_items_maxlen, i_users_maxlen, 2], dtype=torch.long)
+    for i, ii_users in enumerate(i_items_users):
+        for j, iu in enumerate(ii_users):
+            i_item_user_pad[i, j, :len(iu), :] = torch.LongTensor(iu)
+        
 
     return torch.LongTensor(uids), torch.LongTensor(iids), torch.FloatTensor(labels), \
-            u_item_pad, u_user_pad, u_user_item_pad, i_user_pad
+            u_item_pad, u_user_pad, u_user_item_pad, i_user_pad, i_item_pad, i_item_user_pad

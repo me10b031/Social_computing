@@ -32,7 +32,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_path', default='dataset/Ciao/', help='dataset directory path: datasets/Ciao/Epinions')
 parser.add_argument('--batch_size', type=int, default=256, help='input batch size')
 parser.add_argument('--embed_dim', type=int, default=64, help='the dimension of embedding')
-parser.add_argument('--epoch', type=int, default=30, help='the number of epochs to train for')
+parser.add_argument('--epoch', type=int, default=10, help='the number of epochs to train for')
 parser.add_argument('--lr', type=float, default=0.001, help='learning rate')  # [0.001, 0.0005, 0.0001]
 parser.add_argument('--lr_dc', type=float, default=0.1, help='learning rate decay rate')
 parser.add_argument('--lr_dc_step', type=int, default=30, help='the number of steps after which the learning rate decay')
@@ -41,28 +41,37 @@ args = parser.parse_args()
 print(args)
 
 here = os.path.dirname(os.path.abspath(__file__))
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cpu')
 
 def main():
     print('Loading data...')
     with open(args.dataset_path + 'dataset.pkl', 'rb') as f:
         train_set = pickle.load(f)
+        train_set_old = [tuple(i[0:3]) for i in train_set]
         valid_set = pickle.load(f)
+        valid_set_old = [tuple(i[0:3]) for i in valid_set]
         test_set = pickle.load(f)
+        test_set_old = [tuple(i[0:3]) for i in test_set]
 
     with open(args.dataset_path + 'list.pkl', 'rb') as f:
         u_items_list = pickle.load(f)
         u_users_list = pickle.load(f)
         u_users_items_list = pickle.load(f)
         i_users_list = pickle.load(f)
-        (user_count, item_count, rate_count) = pickle.load(f)
+        i_items_list = pickle.load(f)
+        i_items_users_list = pickle.load(f)
+        (user_count, item_count, rate_count, category_count) = pickle.load(f)
     
-    train_data = GRDataset(train_set, u_items_list, u_users_list, u_users_items_list, i_users_list)
-    valid_data = GRDataset(valid_set, u_items_list, u_users_list, u_users_items_list, i_users_list)
-    test_data = GRDataset(test_set, u_items_list, u_users_list, u_users_items_list, i_users_list)
+    train_data = GRDataset(train_set_old, u_items_list, u_users_list, u_users_items_list, i_users_list, i_items_list, i_items_users_list)
+    valid_data = GRDataset(valid_set_old, u_items_list, u_users_list, u_users_items_list, i_users_list, i_items_list, i_items_users_list)
+    test_data = GRDataset(test_set_old, u_items_list, u_users_list, u_users_items_list, i_users_list, i_items_list, i_items_users_list)
     train_loader = DataLoader(train_data, batch_size = args.batch_size, shuffle = True, collate_fn = collate_fn)
     valid_loader = DataLoader(valid_data, batch_size = args.batch_size, shuffle = False, collate_fn = collate_fn)
     test_loader = DataLoader(test_data, batch_size = args.batch_size, shuffle = False, collate_fn = collate_fn)
+    
+    
+    
 
     model = GraphRec(user_count+1, item_count+1, rate_count+1, args.embed_dim).to(device)
 
@@ -109,7 +118,7 @@ def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion, 
     sum_epoch_loss = 0
 
     start = time.time()
-    for i, (uids, iids, labels, u_items, u_users, u_users_items, i_users) in tqdm(enumerate(train_loader), total=len(train_loader)):
+    for i, (uids, iids, labels, u_items, u_users, u_users_items, i_users, i_items, i_items_users) in tqdm(enumerate(train_loader), total=len(train_loader)):
         uids = uids.to(device)
         iids = iids.to(device)
         labels = labels.to(device)
@@ -117,9 +126,11 @@ def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion, 
         u_users = u_users.to(device)
         u_users_items = u_users_items.to(device)
         i_users = i_users.to(device)
+        i_items = i_items.to(device)
+        i_items_users = i_items_users.to(device)
         
         optimizer.zero_grad()
-        outputs = model(uids, iids, u_items, u_users, u_users_items, i_users)
+        outputs = model(uids, iids, u_items, u_users, u_users_items, i_users, i_items, i_items_users)
 
         loss = criterion(outputs, labels.unsqueeze(1))
         loss.backward()
@@ -142,7 +153,7 @@ def validate(valid_loader, model):
     model.eval()
     errors = []
     with torch.no_grad():
-        for uids, iids, labels, u_items, u_users, u_users_items, i_users in tqdm(valid_loader):
+        for uids, iids, labels, u_items, u_users, u_users_items, i_users, i_items, i_items_users in tqdm(valid_loader):
             uids = uids.to(device)
             iids = iids.to(device)
             labels = labels.to(device)
@@ -150,7 +161,9 @@ def validate(valid_loader, model):
             u_users = u_users.to(device)
             u_users_items = u_users_items.to(device)
             i_users = i_users.to(device)
-            preds = model(uids, iids, u_items, u_users, u_users_items, i_users)
+            i_items = i_items.to(device)
+            i_items_users = i_items_users.to(device)
+            preds = model(uids, iids, u_items, u_users, u_users_items, i_users, i_items, i_items_users)
             error = torch.abs(preds.squeeze(1) - labels)
             errors.extend(error.data.cpu().numpy().tolist())
     

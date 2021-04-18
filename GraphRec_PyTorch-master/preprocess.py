@@ -15,11 +15,11 @@ from scipy.io import loadmat
 
 random.seed(1234)
 
-workdir = 'datasets/'
+workdir = 'dataset/'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default='Ciao', help='dataset name: Ciao/Epinions')
-parser.add_argument('--test_prop', default=0.1, help='the proportion of data used for test')
+parser.add_argument('--test_prop', default=0.3, help='the proportion of data used for test')
 args = parser.parse_args()
 
 # load data
@@ -39,16 +39,21 @@ u_items_list = []
 u_users_list = []
 u_users_items_list = []
 i_users_list = []
+i_items_list = []
+i_items_users_list = []
+
 
 user_count = 0
 item_count = 0
 rate_count = 0
+category_count = 0
 
 for s in click_f:
 	uid = s[0]
 	iid = s[1]
 	if args.dataset == 'Ciao':
 		label = s[3]
+		category = s[2]
 	elif args.dataset == 'Epinions':
 		label = s[2]
 
@@ -58,11 +63,13 @@ for s in click_f:
 		item_count = iid
 	if label > rate_count:
 		rate_count = label
-	click_list.append([uid, iid, label])
+	if category > category_count:
+		category_count = category
+	click_list.append([uid, iid, label, category])
 
 pos_list = []
 for i in range(len(click_list)):
-	pos_list.append((click_list[i][0], click_list[i][1], click_list[i][2]))
+	pos_list.append((click_list[i][0], click_list[i][1], click_list[i][2], click_list[i][3]))
 
 # remove duplicate items in pos_list because there are some cases where a user may have different rate scores on the same item.
 pos_list = list(set(pos_list))
@@ -81,11 +88,11 @@ with open(workdir + args.dataset + '/dataset.pkl', 'wb') as f:
 	pickle.dump(test_set, f, pickle.HIGHEST_PROTOCOL)
 
 
-train_df = pd.DataFrame(train_set, columns = ['uid', 'iid', 'label'])
-valid_df = pd.DataFrame(valid_set, columns = ['uid', 'iid', 'label'])
-test_df = pd.DataFrame(test_set, columns = ['uid', 'iid', 'label'])
+train_df = pd.DataFrame(train_set, columns = ['uid', 'iid', 'label', 'category'])
+valid_df = pd.DataFrame(valid_set, columns = ['uid', 'iid', 'label', 'category'])
+test_df = pd.DataFrame(test_set, columns = ['uid', 'iid', 'label', 'category'])
 
-click_df = pd.DataFrame(click_list, columns = ['uid', 'iid', 'label'])
+click_df = pd.DataFrame(click_list, columns = ['uid', 'iid', 'label', 'category'])
 train_df = train_df.sort_values(axis = 0, ascending = True, by = 'uid')
 
 """
@@ -125,6 +132,8 @@ trust_df = pd.DataFrame(trust_list, columns = ['uid', 'fid'])
 trust_df = trust_df.sort_values(axis = 0, ascending = True, by = 'uid')
 
 
+
+
 """
 u_users_list: 存储每个用户互动过的用户uid；
 u_users_items_list: 存储用户每个朋友的物品iid列表
@@ -141,12 +150,68 @@ for u in tqdm(range(user_count + 1)):
 		for uid in u_users:
 			uu_items.append(u_items_list[uid])
 		u_users_items_list.append(uu_items)
-	
+
+    
+"""
+i_items_list:
+i_items_users_list:
+"""
+# for i in tqdm(range(item_count + 1)):
+# 	cat = train_df[train_df['category'] == i]
+# 	i_items = cat['iid'].unique().tolist()
+# 	if i_items == []:
+# 		i_items_list.append([0])
+# 		i_items_users_list.append([[(0,0)]])
+# 	else:
+# 		i_items_list.append(i_items)
+# 		ii_users = []
+# 		for iid in i_items:
+# 			ii_users.append(i_users_list[iid])
+# 		i_items_users_list.append(ii_users)        
+
+
+dict = {}
+for i in tqdm(range(category_count + 1)):
+	cat = train_df[train_df['category'] == i]
+	items = cat['iid'].unique().tolist()
+	dict[i] = items
+    
+def f(y1,y2):
+	return [p for p in dict[y2] if p!=y1]
+    
+train_df_copy=train_df.copy()
+train_df_copy['items']=train_df_copy[['iid','category']].apply(lambda x: f(y1=x['iid'],y2=x['category']),axis=1)    
+
+dict_2 = {}
+for i in range(train_df_copy.shape[0]):
+	dict_2[train_df_copy.iloc[i]['iid']]=train_df_copy.iloc[i]['items']
+dict_2[0] = [] 
+
+for i in tqdm(range(item_count + 1)):
+	if i in dict_2.keys():
+		i_items = dict_2[i]
+	else:
+		i_items = []
+	if i_items == []:
+		i_items_list.append([0])
+		i_items_users_list.append([[(0,0)]])
+	else:
+		i_items_list.append(i_items)
+		ii_users = []
+		for iid in i_items:
+			ii_users.append(i_users_list[iid])
+		i_items_users_list.append(ii_users)            
+        
+        
+        
+    
 with open(workdir + args.dataset + '/list.pkl', 'wb') as f:
 	pickle.dump(u_items_list, f, pickle.HIGHEST_PROTOCOL)
 	pickle.dump(u_users_list, f, pickle.HIGHEST_PROTOCOL)
 	pickle.dump(u_users_items_list, f, pickle.HIGHEST_PROTOCOL)
 	pickle.dump(i_users_list, f, pickle.HIGHEST_PROTOCOL)
-	pickle.dump((user_count, item_count, rate_count), f, pickle.HIGHEST_PROTOCOL)
+	pickle.dump(i_items_list, f, pickle.HIGHEST_PROTOCOL)
+	pickle.dump(i_items_users_list, f, pickle.HIGHEST_PROTOCOL)    
+	pickle.dump((user_count, item_count, rate_count, category_count), f, pickle.HIGHEST_PROTOCOL)
 
 
